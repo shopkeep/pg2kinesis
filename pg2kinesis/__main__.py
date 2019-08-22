@@ -46,6 +46,7 @@ def main(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name, pg_slot
     logger.info('Starting pg2kinesis')
     logger.info('Getting kinesis stream writer')
     writer = StreamWriter(stream_name)
+    message = StreamWriter()
 
     with SlotReader(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name,
                     pg_slot_output_plugin) as reader:
@@ -90,7 +91,7 @@ class Consume(object):
 
         for fmt_msg in fmt_msgs:
             did_put = self.writer.put_message(fmt_msg)
-            if did_put or datetime.now() - self.last_flush > timedelta(seconds=30):
+            if did_put:
                 change.cursor.send_feedback(flush_lsn=change.data_start)
                 logger.info('Flushed LSN: {}'.format(change.data_start))
                 self.last_flush = datetime.now()
