@@ -1,4 +1,5 @@
 from __future__ import division
+from datetime import datetime, timedelta
 import time
 
 import click
@@ -71,6 +72,7 @@ class Consume(object):
         self.msg_window_size = 0
         self.msg_window_count = 0
         self.cur_window = 0
+        self.last_flush = datetime.now()
 
         self.formatter = formatter
         self.writer = writer
@@ -88,9 +90,10 @@ class Consume(object):
 
         for fmt_msg in fmt_msgs:
             did_put = self.writer.put_message(fmt_msg)
-            if did_put:
+            if did_put or datetime.now() - self.last_flush > timedelta(seconds=30):
                 change.cursor.send_feedback(flush_lsn=change.data_start)
                 logger.info('Flushed LSN: {}'.format(change.data_start))
+                self.last_flush = datetime.now()
 
             int_time = int(time.time())
             if not int_time % 10 and int_time != self.cur_window:
