@@ -1,12 +1,29 @@
 from __future__ import division
 import time
+from datetime import datetime, timedelta
 
 import click
 
 from .slot import SlotReader
-from .formatter import get_formatter
+from .formatter import get_formatter, Preprocessor
 from .stream import StreamWriter
 from .log import logger
+
+SUPPORTED_OPERATIONS = {
+    rep_type[0]: rep_type
+    for rep_type in ['all', 'update', 'insert', 'delete', 'truncate']
+}
+
+def parse_operations_param(value):
+    operations = [
+        SUPPORTED_OPERATIONS.get(operation_code)
+        for operation_code in (value or 'a')
+    ]
+    if None in operations:
+        raise click.BadParameter('Unknown operation type to be replicated.')
+    if 'all' in operations:
+        return parse_operations_param('udit')
+    return operations
 
 @click.command()
 @click.option('--pg-dbname', '-d', help='Database to connect to.')
@@ -32,12 +49,12 @@ from .log import logger
               help='Attempt to on start create a the slot.')
 @click.option('--recreate-slot', default=False, is_flag=True,
               help='Deletes the slot on start if it exists and then creates.')
-@click.option('--change-kind', default='all',
-              type=click.Choice(['all', 'update', 'insert', 'delete', 'truncate']),
-              help='Option to specify which type of change to stream. Default is all changes.')
+@click.option('--operations', default='a', type=parse_operations_param,
+              help='Which operations to replicate to kinesis, can be a combination of: '
+                   'a[ll], u[pdate], i[nsert], d[elete], t[runcate]. '
+                   'Default: a')
 def main(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name, pg_slot_output_plugin,
-         stream_name, message_formatter, table_pat, change_kind, full_change, create_slot, recreate_slot):
-
+         stream_name, message_formatter, table_pat, operations, full_change, create_slot, recreate_slot):
     if full_change:
         assert message_formatter == 'CSVPayload', 'Full changes must be formatted as JSON.'
         assert pg_slot_output_plugin == 'wal2json', 'Full changes must use wal2json.'
@@ -56,24 +73,32 @@ def main(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name, pg_slot
             reader.create_slot()
 
         pk_map = reader.primary_key_map
-        formatter = get_formatter(message_formatter, pk_map,
-                                  pg_slot_output_plugin, full_change, table_pat, change_kind)
+        preprocessor = Preprocessor.for_output_plugin(pk_map, full_change, table_pat, pg_slot_output_plugin)
+        formatter = get_formatter(message_formatter)
 
-        consume = Consume(formatter, writer)
+        consume = Consume(preprocessor, formatter, writer, operations)
 
         # Blocking. Responds to Control-C.
         reader.process_replication_stream(consume)
 
 class Consume(object):
-    def __init__(self, formatter, writer):
+    def __init__(self, preprocessor, formatter, writer, operations):
         self.cum_msg_count = 0
         self.cum_msg_size = 0
         self.msg_window_size = 0
         self.msg_window_count = 0
         self.cur_window = 0
 
+        self.preprocessor = preprocessor
         self.formatter = formatter
         self.writer = writer
+        self.operations = operations
+        self.last_flush = datetime.now()
+
+    def flush(self, change):
+        change.cursor.send_feedback(flush_lsn=change.data_start)
+        logger.info('Flushed LSN: {}'.format(change.data_start))
+        self.last_flush = datetime.now()
 
     def __call__(self, change):
         self.cum_msg_count += 1
@@ -82,26 +107,25 @@ class Consume(object):
         self.msg_window_size += change.data_size
         self.msg_window_count += 1
 
-        fmt_msgs = self.formatter(change.payload)
-
         progress_msg = 'xid: {:12} win_count:{:>10} win_size:{:>10}mb cum_count:{:>10} cum_size:{:>10}mb'
 
-        for fmt_msg in fmt_msgs:
-            did_put = self.writer.put_message(fmt_msg)
-            if did_put:
-                change.cursor.send_feedback(flush_lsn=change.data_start)
-                logger.info('Flushed LSN: {}'.format(change.data_start))
+        did_put = False
+        for pp_change in self.preprocessor(change.payload):
+            did_put = did_put or self.writer.put_message(self.formatter(pp_change))
 
-            int_time = int(time.time())
-            if not int_time % 10 and int_time != self.cur_window:
-                logger.info(progress_msg.format(
-                    self.formatter.cur_xact, self.msg_window_count,
-                    self.msg_window_size / 1048576, self.cum_msg_count,
-                    self.cum_msg_size / 1048576))
+        if did_put or datetime.now() - self.last_flush > timedelta(seconds=30):
+            self.flush(change)
 
-                self.cur_window = int_time
-                self.msg_window_size = 0
-                self.msg_window_count = 0
+        int_time = int(time.time())
+        if not int_time % 10 and int_time != self.cur_window:
+            logger.info(progress_msg.format(
+                self.formatter.cur_xact, self.msg_window_count,
+                self.msg_window_size / 1048576, self.cum_msg_count,
+                self.cum_msg_size / 1048576))
+
+            self.cur_window = int_time
+            self.msg_window_size = 0
+            self.msg_window_count = 0
 
 if __name__ == '__main__':
     main()

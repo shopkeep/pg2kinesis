@@ -19,30 +19,38 @@ COL_TYPE_VALUE_TEMPLATE_PAT = r"{col_name}\[{col_type}\]:'?([\w\-]+)'?"
 MISSING_TABLE_ERR = 'Unable to locate table: "{}"'
 MISSING_PK_ERR = 'Unable to locate primary key for table "{}"'
 
-class Formatter(object):
-    VERSION = 0
-    TYPE = 'CDC'
-    IGNORED_CHANGES = {'COMMIT'}
 
-    def __init__(self, primary_key_map, output_plugin='test_decoding',
-                 full_change=False, table_pat=None, change_kind=None):
-
-        self._primary_key_patterns = {}
-        self.output_plugin = output_plugin
-        self.primary_key_map = primary_key_map
-        self.full_change = full_change
-        self.table_pat = table_pat if table_pat is not None else r'[\w_\.]+'
-        self.change_kind = change_kind
-        self.table_re = re.compile(self.table_pat)
+class Preprocessor:
+    def __init__(self, primary_key_map, full_change, table_pat):
         self.cur_xact = ''
-
+        self.table_pat = table_pat if table_pat is not None else r'[\w_\.]+'
+        self.table_re = re.compile(self.table_pat)
+        self.full_change = full_change
+        self.primary_key_map = primary_key_map
+        self._primary_key_patterns = {}
         for k, v in getattr(primary_key_map, 'iteritems', primary_key_map.items)():
             # ":" added to make later look up not need to trim trailing ":".
             self._primary_key_patterns[k + ":"] = re.compile(
                 COL_TYPE_VALUE_TEMPLATE_PAT.format(col_name=v.col_name, col_type=v.col_type)
             )
 
-    def _preprocess_test_decoding_change(self, change):
+    @classmethod
+    def for_output_plugin(cls, primary_key_map, full_change, table_pat, output_plugin):
+        return {
+            'test_decoding': TestDecodingPreprocessor,
+            'wal2json': Wal2JsonPreprocessor
+        }[output_plugin](primary_key_map, full_change, table_pat)
+
+    @staticmethod
+    def _log_and_raise(msg):
+        logger.error(msg)
+        raise Exception(msg)
+
+    def preprocess(self, change):
+        raise Exception('Unimplemented')
+
+class TestDecodingPreprocessor(Preprocessor):
+    def preprocess(self, change, full_change=False):
         """
         Takes a message payload from the test_decoding plugin and distills it
         into a Change tuple currently only looking for primary key.
@@ -58,7 +66,7 @@ class Formatter(object):
 
         if rec[0] == 'BEGIN':
             self.cur_xact = rec[1]
-        elif rec[0] in self.IGNORED_CHANGES:
+        elif rec[0] in {'COMMIT'}:
             pass
         elif rec[0] == 'table':
             table_name = rec[1][:-1]
@@ -80,7 +88,8 @@ class Formatter(object):
 
         return []
 
-    def _preprocess_wal2json_change(self, change):
+class Wal2JsonPreprocessor(Preprocessor):
+    def preprocess(self, change):
         """
         Takes a message payload from the wal2json plugin and distills it into a
         list of Change or FullChange tuples.
@@ -111,14 +120,17 @@ class Formatter(object):
         changes = []
 
         for change in change_dictionary['change']:
-
-            if change['kind'].lower() == self.change_kind.lower() or self.change_kind.lower() == 'all':
-                table_name = change['table']
-                schema = change['schema']
-
-                if self.table_re.search(table_name):
-                    if self.full_change:
-                        changes.append(FullChange(xid=self.cur_xact, change=change))
+            table_name = change['table']
+            schema = change['schema']
+            full_table = '{}.{}'.format(schema, table_name)
+            if self.table_re.search(table_name):
+                if self.full_change:
+                    changes.append(FullChange(xid=self.cur_xact, change=change))
+                else:
+                    try:
+                        primary_key = self.primary_key_map[full_table]
+                    except KeyError:
+                        self._log_and_raise(MISSING_TABLE_ERR.format(full_table))
                     else:
                         try:
                             full_table = '{}.{}'.format(schema, table_name)
@@ -134,17 +146,18 @@ class Formatter(object):
                                                   pkey=pkey))
         return changes
 
+
+class Formatter:
+    VERSION = 0
+    TYPE = 'CDC'
+
     @staticmethod
     def _log_and_raise(msg):
         logger.error(msg)
         raise Exception(msg)
 
-    def __call__(self, change):
-        if self.output_plugin == 'test_decoding':
-            pp_changes = self._preprocess_test_decoding_change(change)
-        elif self.output_plugin == 'wal2json':
-            pp_changes = self._preprocess_wal2json_change(change)
-        return [self.produce_formatted_message(pp_change) for pp_change in pp_changes]
+    def __call__(self, preprocessed_changes):
+        return [self.produce_formatted_message(pp_change) for pp_change in preprocessed_changes]
 
     def produce_formatted_message(self, change):
         return change
@@ -166,6 +179,6 @@ class CSVPayloadFormatter(Formatter):
         return Message(change=change, fmt_msg=fmt_msg)
 
 
-def get_formatter(name, primary_key_map, output_plugin, full_change, table_pat, change_kind):
+def get_formatter(name):
     formatter_f = getattr(sys.modules[__name__], '%sFormatter' % name)
-    return formatter_f(primary_key_map, output_plugin, full_change, table_pat, change_kind)
+    return formatter_f()
