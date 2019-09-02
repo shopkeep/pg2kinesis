@@ -16,6 +16,7 @@ def test_consume():
     mock_change.data_start = 10
     mock_change.data_size = 100
     mock_change.payload = 'PAYLOAD'
+    mock_change.ignored = 0
 
     mock_writer.put_message = Mock(return_value=False)
     consume(mock_change)
@@ -29,8 +30,17 @@ def test_consume():
     assert call.cursor.send_feedback(flush_lsn=10) in mock_change.mock_calls, \
         'we sent feedback!'
 
+    mock_formatter.ignored = Mock(return_value=True)
+    consume(mock_change)
+    assert call.cursor.send_feedback(flush_lsn=10) in mock_change.mock_calls, \
+        'we sent feedback!'
 
-    mock_time = Mock()
+    mock_formatter.ignored = Mock(return_value=False)
+    consume(mock_change)
+    assert call.cursor.send_feedback(flush_lsn=10) not in mock_change.mock_calls, \
+ \
+ \
+        mock_time = Mock()
     mock_time.return_value = 11.0
 
     consume.msg_window_size = 0
@@ -52,3 +62,5 @@ def test_consume():
     with patch('time.time', mock_time):
         consume(mock_change)
         assert consume.msg_window_size == 100, 'msg_window_size not reset if time is same as cur_window'
+
+

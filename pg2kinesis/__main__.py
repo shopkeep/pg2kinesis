@@ -46,7 +46,7 @@ def main(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name, pg_slot
     logger.info('Starting pg2kinesis')
     logger.info('Getting kinesis stream writer')
     writer = StreamWriter(stream_name)
-    message = StreamWriter()
+    # message = StreamWriter()
 
     with SlotReader(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name,
                     pg_slot_output_plugin) as reader:
@@ -86,6 +86,13 @@ class Consume(object):
         self.msg_window_count += 1
 
         fmt_msgs = self.formatter(change.payload)
+        if not fmt_msgs:
+            if self.formatter.ignored >= 1000:
+                change.cursor.send_feedback(flush_lsn=change.data_start)
+                logger.info('Flushed LSN: {}'.format(change.data_start))
+                self.last_flush = datetime.now()
+                self.formatter.ignored = 0
+                return
 
         progress_msg = 'xid: {:12} win_count:{:>10} win_size:{:>10}mb cum_count:{:>10} cum_size:{:>10}mb'
 

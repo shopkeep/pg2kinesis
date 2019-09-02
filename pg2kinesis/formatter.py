@@ -35,6 +35,7 @@ class Formatter(object):
         self.change_kind = change_kind
         self.table_re = re.compile(self.table_pat)
         self.cur_xact = ''
+        self.ignored = 0
 
         for k, v in getattr(primary_key_map, 'iteritems', primary_key_map.items)():
             # ":" added to make later look up not need to trim trailing ":".
@@ -132,6 +133,9 @@ class Formatter(object):
                                                   table=full_table,
                                                   operation=change['kind'].lower(),
                                                   pkey=pkey))
+            else:
+                self.ignored += 1
+
         return changes
 
     @staticmethod
