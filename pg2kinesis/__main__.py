@@ -46,7 +46,6 @@ def main(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name, pg_slot
     logger.info('Starting pg2kinesis')
     logger.info('Getting kinesis stream writer')
     writer = StreamWriter(stream_name)
-    # message = StreamWriter()
 
     with SlotReader(pg_dbname, pg_host, pg_port, pg_user, pg_sslmode, pg_slot_name,
                     pg_slot_output_plugin) as reader:
