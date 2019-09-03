@@ -41,7 +41,7 @@ class StreamWriter(object):
             self._send_agg_record(agg_record)
             self.last_send = time.time()
 
-        return agg_record or True
+        return agg_records
 
     def _send_agg_record(self, agg_record):
         if agg_record is None:
