@@ -4,7 +4,7 @@ import time
 import click
 
 from .slot import SlotReader
-from .formatter import get_formatter, Change as ChangeTuple, FullChange as FullChangeTuple, Message as MessageTuple
+from .formatter import get_formatter
 from .stream import StreamWriter
 from .log import logger
 

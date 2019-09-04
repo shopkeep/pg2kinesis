@@ -18,6 +18,7 @@ def test_consume():
     mock_change.payload = 'PAYLOAD'
 
     mock_writer.put_message = Mock(return_value=False)
+    consume.should_send_to_kinesis = Mock(return_value=True)
     consume(mock_change)
     assert mock_writer.put_message.called, 'Sanity'
     assert call.cursor.send_feedback(flush_lsn=10) not in mock_change.mock_calls, \
