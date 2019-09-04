@@ -53,3 +53,51 @@ def test_consume():
     with patch('time.time', mock_time):
         consume(mock_change)
         assert consume.msg_window_size == 100, 'msg_window_size not reset if time is same as cur_window'
+
+
+def mock_should_send_to_kinesis(obj, fmt_msg):
+    # import pdb; pdb.set_trace()
+    return any(fmt_msg.startswith(op) for op in obj.filter_operations)
+
+
+def test_consume_excludes():
+    mock_formatter = Mock(return_value=['insert_msg1', 'insert_msg2'])
+    mock_formatter.cur_xact = 'TEST_TRANSACTION'
+    mock_writer = Mock()
+
+    consume = Consume(mock_formatter, mock_writer, ['delete'])
+
+    mock_change = Mock()
+    mock_change.data_start = 10
+    mock_change.data_size = 100
+    mock_change.payload = 'PAYLOAD'
+
+    mock_writer.put_message = Mock(return_value=False)
+
+    with patch.object(Consume, "should_send_to_kinesis", autospec=True) as should_send:
+        should_send.side_effect = mock_should_send_to_kinesis
+        consume(mock_change)
+        mock_writer.put_message.assert_has_calls([call(None), call(None)])
+
+
+def test_consume_includes():
+    mock_formatter = Mock(return_value=['delete_msg1', 'delete_msg2'])
+    mock_formatter.cur_xact = 'TEST_TRANSACTION'
+    mock_writer = Mock()
+
+    consume = Consume(mock_formatter, mock_writer, ['delete'])
+
+    mock_change = Mock()
+    mock_change.data_start = 10
+    mock_change.data_size = 100
+    mock_change.payload = 'PAYLOAD'
+    mock_change.cursor = Mock()
+    mock_change.cursor.send_feedback = Mock(return_value=True)
+
+    mock_writer.put_message = Mock(return_value=True)
+
+    with patch.object(Consume, "should_send_to_kinesis", autospec=True) as should_send:
+        should_send.side_effect = mock_should_send_to_kinesis
+        consume(mock_change)
+        mock_writer.put_message.assert_has_calls([call('delete_msg1'), call('delete_msg2')])
+        mock_change.cursor.send_feedback.assert_has_calls([call(flush_lsn=mock_change.data_start)])
