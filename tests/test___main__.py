@@ -10,7 +10,7 @@ def test_consume():
     mock_formatter.cur_xact = 'TEST_TRANSACTION'
     mock_writer = Mock()
 
-    consume = Consume(mock_formatter, mock_writer, 'all')
+    consume = Consume(mock_formatter, mock_writer, ['insert', 'update', 'delete', 'truncate'])
 
     mock_change = Mock()
     mock_change.data_start = 10
